@@ -1,0 +1,133 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: 
+      - "main"
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Login to DockerHub
+      env:
+        DOCKER_USERNAME: ${{secrets.DOCKER_USERNAME}}
+        DOCKER_PASSWORD: ${{secrets.DOCKER_PASSWORD}}
+      run: docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+      
+    - name: Build the Docker image
+      run: docker build -t ${{secrets.DOCKER_USERNAME}}/kuber-01:${{ github.sha }} -t ${{secrets.DOCKER_USERNAME}}/kuber-01:latest .
+    
+    - name: Push to DockerHub
+      run: |
+        docker push ${{secrets.DOCKER_USERNAME}}/kuber-01:${{ github.sha }}
+        docker push ${{secrets.DOCKER_USERNAME}}/kuber-01:latest
+    
+    - name: Security Scan with Trivy
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: "${{secrets.DOCKER_USERNAME}}/kuber-01:latest"
+        format: "table"
+        ignore-unfixed: true
+        severity: "HIGH,CRITICAL"
+        exit-code: 0
+    
+    - name: SSH into EC2 & Deploy
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ubuntu
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          sudo docker pull ${{secrets.DOCKER_USERNAME}}/kuber-01:latest
+          sudo docker rm -f kuber-01-container || true
+          sudo docker run -d -p 80:3000 --name kuber-01-container ${{secrets.DOCKER_USERNAME}}/kuber-01:latest
+    
+    - name: Send Slack Notification (Success)
+      if: success()
+      run: |
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+        curl -X POST -H 'Content-type: application/json' --data '{
+          "blocks": [
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Ref*\n<${{ github.server_url }}/${{ github.repository }}/tree/${{ github.ref_name }}|${{ github.ref }}>"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Event*\n${{ github.event_name }}"
+                }
+              ]
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Actions URL*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|CI/CD Pipeline>"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${SHORT_SHA}>"
+                }
+              ]
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":white_check_mark: CI/CD Pipeline Successful!\n:tada: The build and deployment for *${{ github.repository }}* was successful! :white_check_mark:"
+              }
+            }
+          ]
+        }' ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: Send Slack Notification (Failure)
+      if: failure()
+      run: |
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+        curl -X POST -H 'Content-type: application/json' --data '{
+          "blocks": [
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Ref*\n<${{ github.server_url }}/${{ github.repository }}/tree/${{ github.ref_name }}|${{ github.ref }}>"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Event*\n${{ github.event_name }}"
+                }
+              ]
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Actions URL*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|CI/CD Pipeline>"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${SHORT_SHA}>"
+                }
+              ]
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":x: CI/CD Pipeline Failed!\n:warning: The build or deployment for *${{ github.repository }}* failed! Check GitHub Actions logs."
+              }
+            }
+          ]
+        }' ${{ secrets.SLACK_WEBHOOK_URL }}
