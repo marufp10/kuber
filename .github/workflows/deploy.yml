@@ -157,3 +157,5 @@ jobs:
         body: The build or deployment for ${{ github.repository }} failed! Check GitHub Actions logs.
         to: maruf.mparvez@gmail.com
         from: ${{ secrets.MAIL_USERNAME }}
+
+        #This is for push 
