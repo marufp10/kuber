@@ -158,4 +158,4 @@ jobs:
         to: maruf.mparvez@gmail.com
         from: ${{ secrets.MAIL_USERNAME }}
 
-        #This is for push 
+        #This is for pushing the image to the docker hub
